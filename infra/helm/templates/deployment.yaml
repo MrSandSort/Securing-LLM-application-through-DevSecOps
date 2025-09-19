@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llmapp
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: llmapp }
+  template:
+    metadata:
+      labels: { app: llmapp }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: api
+          image: ghcr.io/ORG/llmapp:latest
+          ports: [{containerPort: 8080}]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+          env:
+            - name: MODEL_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: llm-secrets
+                  key: endpoint

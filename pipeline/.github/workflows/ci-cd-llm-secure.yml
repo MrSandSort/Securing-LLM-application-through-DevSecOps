@@ -1,0 +1,63 @@
+name: ci-cd-llm-secure
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  build_test_scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Code + IaC + secrets scanning
+      - uses: semgrep/semgrep-action@v1
+      - uses: zricethezav/gitleaks-action@v2
+      - name: IaC scan (Checkov)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          framework: terraform,kubernetes
+
+      # Build container + SBOM + vulnerability scan
+      - name: Build image
+        run: docker build -t ghcr.io/ORG/llmapp:${{ github.sha }} .
+      - name: Generate SBOM
+        run: syft ghcr.io/ORG/llmapp:${{ github.sha }} -o spdx-json > sbom.json
+      - name: Scan vulns
+        run: grype ghcr.io/ORG/llmapp:${{ github.sha }} --fail-on high
+
+      # Sign image & SBOM
+      - name: Cosign sign image
+        run: cosign sign ghcr.io/ORG/llmapp:${{ github.sha }}
+      - name: Attach SBOM attestation
+        run: cosign attest --predicate sbom.json --type spdx ghcr.io/ORG/llmapp:${{ github.sha }}
+
+      # LLM safety/eval gates
+      - name: Install deps
+        run: pip install -r evals/requirements.txt || true
+      - name: Run adversarial evals
+        run: python evals/harness/run.py --endpoint "$MODEL_ENDPOINT" --tests evals/adversarial --out results.json
+      - name: Enforce safety budget
+        run: python scripts/check_eval_thresholds.py --file results.json --max_asr 0.15 --max_pii_leak 0
+
+      # Policy as code (OPA)
+      - name: Conftest policies
+        run: conftest test security/policies
+
+  deploy:
+    needs: build_test_scan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: azure/setup-kubectl@v4
+      - name: Helm upgrade
+        run: helm upgrade --install llmapp infra/helm --set image.tag=${{ github.sha }}
