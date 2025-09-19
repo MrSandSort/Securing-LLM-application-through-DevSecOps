@@ -14,10 +14,11 @@ This starter repo scaffolds a reference RAG + tool-use LLM application with a **
 infra/
   terraform/
   helm/
-pipeline/
   .github/workflows/
 app/
+  _init_.py
   api/
+  _init_.py
   llm/
 security/
   policies/
